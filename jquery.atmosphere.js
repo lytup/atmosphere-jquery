@@ -54,7 +54,7 @@ jQuery.atmosphere = function () {
     };
 
     return {
-        version: "2.0.6-jquery",
+        version: "2.0.7-jquery",
         uuid : 0,
         requests: [],
         callbacks: [],
@@ -787,8 +787,17 @@ jQuery.atmosphere = function () {
                     dataType: "jsonp",
                     error: function (jqXHR, textStatus, errorThrown) {
                         _response.error = true;
-                        if (jqXHR.status < 300) {
-                            _reconnect(_jqxhr, rq, 0);
+
+                        if (rq.openId) {
+                            clearTimeout(rq.openId);
+                        }
+
+                        if (rq.reconnect && _requestCount++ < rq.maxReconnectOnClose) {
+                            _open('re-connecting', rq.transport, rq);
+                            _reconnect(_jqxhr, rq, rq.reconnectInterval);
+                            rq.openId = setTimeout(function() {
+                                _triggerOpen(rq);
+                            }, rq.reconnectInterval + 1000);
                         } else {
                             _onError(jqXHR.status, errorThrown);
                         }
@@ -1120,18 +1129,22 @@ jQuery.atmosphere = function () {
                         jQuery.atmosphere.debug("Websocket successfully opened");
                     }
 
+                    var reopening = webSocketOpened;
+
+                    webSocketOpened = true;
+                    if(_websocket != null) {
+                        _websocket.webSocketOpened = webSocketOpened;
+                    }
+
                     if (!_request.enableProtocol) {
-                        if (!webSocketOpened) {
-                            _open('opening', "websocket", _request);
-                        } else {
+                        if (reopening) {
                             _open('re-opening', "websocket", _request);
+                        } else {
+                            _open('opening', "websocket", _request);
                         }
                     }
 
-                    webSocketOpened = true;
                     if (_websocket != null) {
-                        _websocket.webSocketOpened = webSocketOpened;
-
                         if (_request.method === 'POST') {
                             _response.state = "messageReceived";
                             _websocket.send(_request.data);
@@ -1582,12 +1595,9 @@ jQuery.atmosphere = function () {
                         _timeout(_request);
 
                         if (rq.transport !== 'polling') {
-                            if ((!rq.enableProtocol || !request.firstMessage) && ajaxRequest.readyState === 2) {
-                                _triggerOpen(rq);
-                            }
                             // MSIE 9 and lower status can be higher than 1000, Chrome can be 0
                             var status = 200;
-                            if (ajaxRequest.readyState > 1) {
+                            if (ajaxRequest.readyState === 4) {
                                 status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
                             }
 
@@ -1597,6 +1607,11 @@ jQuery.atmosphere = function () {
                                 _clearState();
                                 reconnectF();
                                 return;
+                            }
+                            
+                            // Firefox incorrectly send statechange 0->2 when a reconnect attempt fails. The above checks ensure that onopen is not called for these
+                            if ((!rq.enableProtocol || !request.firstMessage) && ajaxRequest.readyState === 2) {
+                                _triggerOpen(rq);
                             }
                         } else if (ajaxRequest.readyState === 4) {
                             update = true;
@@ -2332,6 +2347,7 @@ jQuery.atmosphere = function () {
                             f.onError(response);
                         break;
                     case "opening":
+                        delete _request.closed;
                         if (typeof (f.onOpen) !== 'undefined')
                             f.onOpen(response);
                         break;
@@ -2348,6 +2364,7 @@ jQuery.atmosphere = function () {
                             f.onClientTimeout(_request);
                         break;
                     case "re-opening":
+                        delete _request.closed;
                         if (typeof (f.onReopen) !== 'undefined')
                             f.onReopen(_request, response);
                         break;
@@ -2472,16 +2489,20 @@ jQuery.atmosphere = function () {
                     var url = _request.url.replace(/([?&])_=[^&]*/, query);
                     url = url + (url === _request.url ? (/\?/.test(_request.url) ? "&" : "?") + query : "");
 
+                    var async = (jQuery.browser.msie) ? true: false;
+
                     if (_request.connectTimeout > 0) {
                         jQuery.ajax({
                             url: url,
-                            async: false,
-                            timeout: _request.connectTimeout
+                            async: async,
+                            timeout: _request.connectTimeout,
+                            cache: false
                         });
                     } else {
                         jQuery.ajax({
                             url: url,
-                            async: false
+                            async: async,
+                            cache: false
                         });
                     }
                 }
@@ -2794,11 +2815,11 @@ jQuery.atmosphere = function () {
         error: function () {
             jQuery.atmosphere.log('error', arguments);
         },
-        
+
         // TODO extract to utils or something
         isBinary: function (data) {
-            var string = Object.prototype.toString.call(data);
-            return string === "[object Blob]" || string === "[object ArrayBuffer]";
+            // True if data is an instance of Blob, ArrayBuffer or ArrayBufferView 
+            return /^\[object\s(?:Blob|ArrayBuffer|.+Array)\]$/.test(Object.prototype.toString.call(data));
         }
     };
 }();
