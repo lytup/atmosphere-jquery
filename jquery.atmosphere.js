@@ -54,7 +54,8 @@ jQuery.atmosphere = function () {
     };
 
     return {
-        version: "2.0.4-jquery",
+        version: "2.0.5-jquery",
+        uuid : 0,
         requests: [],
         callbacks: [],
 
@@ -166,7 +167,7 @@ jQuery.atmosphere = function () {
                 request: null,
                 partialMessage: "",
                 errorHandled: false,
-                id: 0
+                closedByClientTimeout: false
             };
 
             /**
@@ -355,9 +356,11 @@ jQuery.atmosphere = function () {
                 }
 
                 // Protocol
-                _request.firstMessage = true;
+                _request.firstMessage = jQuery.atmosphere.uuid == 0 ? true : false;
                 _request.isOpen = false;
                 _request.ctime = jQuery.now();
+                _request.uuid = jQuery.atmosphere.uuid;
+                _request.closedByClientTimeout = false;
 
                 if (_request.transport !== 'websocket' && _request.transport !== 'sse') {
                     _executeRequest(_request);
@@ -688,7 +691,7 @@ jQuery.atmosphere = function () {
                         encodeURIComponent(jQuery.stringifyJSON({
                             ts: jQuery.now() + 1,
                             heir: (storageService.get("children") || [])[0]
-                        }));
+                        })) + "; path=/";
                 }
 
                 // Chooses a storageService
@@ -1029,7 +1032,7 @@ jQuery.atmosphere = function () {
                 _sse.onerror = function (message) {
                     clearTimeout(_request.id);
 
-                    if (_response.state === 'closedByClient') return;
+                    if (_response.closedByClientTimeout) return;
 
                     _invokeClose(sseOpened);
                     _clearState();
@@ -1204,7 +1207,7 @@ jQuery.atmosphere = function () {
                         jQuery.atmosphere.warn("Websocket closed, wasClean: " + message.wasClean);
                     }
 
-                    if (_response.state === 'closedByClient') {
+                    if (_response.closedByClientTimeout) {
                         return;
                     }
 
@@ -1264,6 +1267,8 @@ jQuery.atmosphere = function () {
                     if (request.transport !== 'long-polling') {
                         _triggerOpen(request);
                     }
+
+                    jQuery.atmosphere.uuid = request.uuid;
                 } else if (request.enableProtocol && request.firstMessage) {
                     // In case we are getting some junk from IE
                     b = false;
@@ -1285,6 +1290,7 @@ jQuery.atmosphere = function () {
             }
 
             function _onClientTimeout(_request) {
+                _response.closedByClientTimeout = true;
                 _response.state = 'closedByClient';
                 _response.responseBody = "";
                 _response.status = 408;
@@ -2223,7 +2229,7 @@ jQuery.atmosphere = function () {
              *
              */
             function _pushWebSocket(message) {
-                var msg = _getStringMessage(message);
+                var msg = jQuery.atmosphere.isBinary(message) ? message : _getStringMessage(message);
                 var data;
                 try {
                     if (_request.dispatchUrl != null) {
@@ -2529,7 +2535,7 @@ jQuery.atmosphere = function () {
                     // Clears trace timer
                     clearInterval(_traceTimer);
                     // Removes the trace
-                    document.cookie = _sharingKey + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+                    document.cookie = _sharingKey + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
                     // The heir is the parent unless unloading
                     _storageService.signal("close", {
                         reason: "",
@@ -2676,12 +2682,12 @@ jQuery.atmosphere = function () {
                 return true;
             }
 
-            // KreaTV 4.1 -> 4.6
+            // KreaTV 4.1 -> 4.4
             else if (jQuery.trim(navigator.userAgent).slice(0, 16) === "KreaTVWebKit/531") {
                 return true;
             }
             // KreaTV 3.8
-            else if (jQuery.trim(navigator.userAgent).slice(-7).toLowerCase() === "Kreatel") {
+            else if (jQuery.trim(navigator.userAgent).slice(-7).toLowerCase() === "kreatel") {
                 return true;
             }
 
@@ -2777,6 +2783,12 @@ jQuery.atmosphere = function () {
 
         error: function () {
             jQuery.atmosphere.log('error', arguments);
+        },
+        
+        // TODO extract to utils or something
+        isBinary: function (data) {
+            var string = Object.prototype.toString.call(data);
+            return string === "[object Blob]" || string === "[object ArrayBuffer]";
         }
     };
 }();
