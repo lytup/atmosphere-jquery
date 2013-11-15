@@ -1255,8 +1255,8 @@ jQuery.atmosphere = function() {
 				
 				if (request.trackMessageLength) {
 					// prepend partialMessage if any
-                    message = response.partialMessage + message.replace(/(\r\n|\n|\r)/gm,"").replace(/^\s+|\s+$/g,"");
-
+					message = response.partialMessage + message;
+					
 					var messages = [];
 					var messageStart = message.indexOf(request.messageDelimiter);
 					while (messageStart !== -1) {
@@ -1490,7 +1490,9 @@ jQuery.atmosphere = function() {
 						var skipCallbackInvocation = false;
 						var update = false;
 						
-						if (rq.transport === 'streaming' && rq.readyState > 2 && ajaxRequest.readyState === 4) {
+						// Opera doesn't call onerror if the server disconnect.
+						if (jQuery.browser.opera && rq.transport === 'streaming' && rq.readyState > 2 && ajaxRequest.readyState === 4) {
+							
 							_clearState();
 							reconnectF();
 							return;
@@ -1508,21 +1510,21 @@ jQuery.atmosphere = function() {
 						if ((!rq.enableProtocol || !request.firstMessage) && rq.transport !== 'polling' && ajaxRequest.readyState === 2) {
 							_triggerOpen(rq);
 						}
-                        // MSIE 9 and lower status can be higher than 1000, Chrome can be 0
-                        var status = 0;
-                        if (ajaxRequest.readyState !== 0) {
-                            status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
-                        }
-
-                        if (status >= 300 || status === 0) {
-                            // Prevent onerror callback to be called
-                            _response.errorHandled = true;
-                            _clearState();
-                            reconnectF();
-                            return;
-                        }
-
+						
 						if (update) {
+							// MSIE 9 and lower status can be higher than 1000, Chrome can be 0
+							var status = 0;
+							if (ajaxRequest.readyState !== 0) {
+								status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
+							}
+							
+							if (status >= 300 || status === 0) {
+								// Prevent onerror callback to be called
+								_response.errorHandled = true;
+								_clearState();
+								reconnectF();
+								return;
+							}
 							var responseText = ajaxRequest.responseText;
 							
 							if (jQuery.trim(responseText.length) === 0 && rq.transport === 'long-polling') {
@@ -1641,7 +1643,7 @@ jQuery.atmosphere = function() {
 				
 				if (create) {
 					ajaxRequest.open(request.method, url, true);
-					if (request.connectTimeout > 0) {
+					if (request.connectTimeout > -1) {
 						request.id = setTimeout(function() {
 							if (request.requestCount === 0) {
 								_clearState();
@@ -1813,7 +1815,7 @@ jQuery.atmosphere = function() {
 							xdr.send(rq.data);
 						}
 						
-						if (rq.connectTimeout > 0) {
+						if (rq.connectTimeout > -1) {
 							rq.id = setTimeout(function() {
 								if (rq.requestCount === 0) {
 									_clearState();
@@ -2348,7 +2350,7 @@ jQuery.atmosphere = function() {
 					var url = _request.url.replace(/([?&])_=[^&]*/, query);
 					url = url + (url === _request.url ? (/\?/.test(_request.url) ? "&" : "?") + query : "");
 					
-					if (_request.connectTimeout > 0) {
+					if (_request.connectTimeout > -1) {
 						jQuery.ajax({
 							url: url,
 							async: false,
