@@ -1190,11 +1190,6 @@ jQuery.atmosphere = function () {
                         }
                     }
                 };
-
-                if (_websocket.url === undefined) {
-                    // Android 4.1 does not really support websockets and fails silently 
-                    _websocket.onclose({reason:"Android 4.1 does not support websockets.", wasClean: false});
-                }
             }
 
             function _handleProtocol(request, message) {
@@ -1258,7 +1253,7 @@ jQuery.atmosphere = function () {
                     var messageStart = message.indexOf(request.messageDelimiter);
                     while (messageStart != -1) {
                         var str = jQuery.trim(message.substring(0, messageStart));
-                        var messageLength = parseInt(str, 10);
+                        var messageLength = parseInt(str);
                         if (isNaN(messageLength))
                             throw 'message length "'+str+'" is not a number';
                         messageStart += request.messageDelimiter.length;
@@ -1729,7 +1724,6 @@ jQuery.atmosphere = function () {
                     _response.reason = status == 0 ? "Server resumed the connection or down." : "OK";
 
                     // Reconnect immedialtely
-                    clearTimeout(request.id);
                     request.id = setTimeout(function () {
                         _executeRequest(request);
                     }, reconnectInterval);
