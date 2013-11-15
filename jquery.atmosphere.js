@@ -54,8 +54,7 @@ jQuery.atmosphere = function () {
     };
 
     return {
-        version: "2.0.7-jquery",
-        uuid : 0,
+        version: "2.0.4-jquery",
         requests: [],
         callbacks: [],
 
@@ -167,7 +166,7 @@ jQuery.atmosphere = function () {
                 request: null,
                 partialMessage: "",
                 errorHandled: false,
-                closedByClientTimeout: false
+                id: 0
             };
 
             /**
@@ -356,11 +355,9 @@ jQuery.atmosphere = function () {
                 }
 
                 // Protocol
-                _request.firstMessage = jQuery.atmosphere.uuid == 0 ? true : false;
+                _request.firstMessage = true;
                 _request.isOpen = false;
                 _request.ctime = jQuery.now();
-                _request.uuid = jQuery.atmosphere.uuid;
-                _request.closedByClientTimeout = false;
 
                 if (_request.transport !== 'websocket' && _request.transport !== 'sse') {
                     _executeRequest(_request);
@@ -691,7 +688,7 @@ jQuery.atmosphere = function () {
                         encodeURIComponent(jQuery.stringifyJSON({
                             ts: jQuery.now() + 1,
                             heir: (storageService.get("children") || [])[0]
-                        })) + "; path=/";
+                        }));
                 }
 
                 // Chooses a storageService
@@ -787,17 +784,8 @@ jQuery.atmosphere = function () {
                     dataType: "jsonp",
                     error: function (jqXHR, textStatus, errorThrown) {
                         _response.error = true;
-
-                        if (rq.openId) {
-                            clearTimeout(rq.openId);
-                        }
-
-                        if (rq.reconnect && _requestCount++ < rq.maxReconnectOnClose) {
-                            _open('re-connecting', rq.transport, rq);
-                            _reconnect(_jqxhr, rq, rq.reconnectInterval);
-                            rq.openId = setTimeout(function() {
-                                _triggerOpen(rq);
-                            }, rq.reconnectInterval + 1000);
+                        if (jqXHR.status < 300) {
+                            _reconnect(_jqxhr, rq, 0);
                         } else {
                             _onError(jqXHR.status, errorThrown);
                         }
@@ -1041,7 +1029,7 @@ jQuery.atmosphere = function () {
                 _sse.onerror = function (message) {
                     clearTimeout(_request.id);
 
-                    if (_response.closedByClientTimeout) return;
+                    if (_response.state === 'closedByClient') return;
 
                     _invokeClose(sseOpened);
                     _clearState();
@@ -1054,7 +1042,7 @@ jQuery.atmosphere = function () {
                         if (_requestCount++ < _request.maxReconnectOnClose) {
                             _open('re-connecting', _request.transport, _request);
                             if (_request.reconnectInterval > 0) {
-                                _request.reconnectId = setTimeout(function () {
+                                _request.id = setTimeout(function () {
                                     _executeSSE(true);
                                 }, _request.reconnectInterval);
                             } else {
@@ -1129,22 +1117,18 @@ jQuery.atmosphere = function () {
                         jQuery.atmosphere.debug("Websocket successfully opened");
                     }
 
-                    var reopening = webSocketOpened;
-
-                    webSocketOpened = true;
-                    if(_websocket != null) {
-                        _websocket.webSocketOpened = webSocketOpened;
-                    }
-
                     if (!_request.enableProtocol) {
-                        if (reopening) {
-                            _open('re-opening', "websocket", _request);
-                        } else {
+                        if (!webSocketOpened) {
                             _open('opening', "websocket", _request);
+                        } else {
+                            _open('re-opening', "websocket", _request);
                         }
                     }
 
+                    webSocketOpened = true;
                     if (_websocket != null) {
+                        _websocket.webSocketOpened = webSocketOpened;
+
                         if (_request.method === 'POST') {
                             _response.state = "messageReceived";
                             _websocket.send(_request.data);
@@ -1220,7 +1204,7 @@ jQuery.atmosphere = function () {
                         jQuery.atmosphere.warn("Websocket closed, wasClean: " + message.wasClean);
                     }
 
-                    if (_response.closedByClientTimeout) {
+                    if (_response.state === 'closedByClient') {
                         return;
                     }
 
@@ -1238,7 +1222,7 @@ jQuery.atmosphere = function () {
                         if (_requestCount++ < _request.maxReconnectOnClose) {
                             _open('re-connecting', _request.transport, _request);
                             if (_request.reconnectInterval > 0) {
-                                _request.reconnectId = setTimeout(function () {
+                                _request.id = setTimeout(function () {
                                     _response.responseBody = "";
                                     _response.messages = [];
                                     _executeWebSocket(true);
@@ -1270,9 +1254,6 @@ jQuery.atmosphere = function () {
             function _handleProtocol(request, message) {
                 // The first messages is always the uuid.
                 var b = true;
-
-                if (request.transport === 'polling') return b;
-
                 if (jQuery.trim(message).length !== 0 && request.enableProtocol && request.firstMessage) {
                     request.firstMessage = false;
                     var messages = message.split(request.messageDelimiter);
@@ -1283,8 +1264,6 @@ jQuery.atmosphere = function () {
                     if (request.transport !== 'long-polling') {
                         _triggerOpen(request);
                     }
-
-                    jQuery.atmosphere.uuid = request.uuid;
                 } else if (request.enableProtocol && request.firstMessage) {
                     // In case we are getting some junk from IE
                     b = false;
@@ -1306,7 +1285,6 @@ jQuery.atmosphere = function () {
             }
 
             function _onClientTimeout(_request) {
-                _response.closedByClientTimeout = true;
                 _response.state = 'closedByClient';
                 _response.responseBody = "";
                 _response.status = 408;
@@ -1333,7 +1311,7 @@ jQuery.atmosphere = function () {
              * @param response
              */
             function _trackMessageSize(message, request, response) {
-                if (!_handleProtocol(request, message))
+                if (!_handleProtocol(_request, message))
                     return true;
                 if (message.length === 0)
                     return true;
@@ -1402,7 +1380,7 @@ jQuery.atmosphere = function () {
                     _response.transport = _request.fallbackTransport;
                     _request.fallbackTransport = 'none';
                     if (reconnectInterval > 0) {
-                        _request.reconnectId = setTimeout(function () {
+                        _request.id = setTimeout(function () {
                             _execute();
                         }, reconnectInterval);
                     } else {
@@ -1563,8 +1541,8 @@ jQuery.atmosphere = function () {
                             if (!_response.status) {
                                 _response.status = 500;
                             }
+                            _clearState();
                             if (!_response.errorHandled) {
-                                _clearState();
                                 reconnectF();
                             }
                         };
@@ -1595,9 +1573,12 @@ jQuery.atmosphere = function () {
                         _timeout(_request);
 
                         if (rq.transport !== 'polling') {
+                            if ((!rq.enableProtocol || !request.firstMessage) && ajaxRequest.readyState === 2) {
+                                _triggerOpen(rq);
+                            }
                             // MSIE 9 and lower status can be higher than 1000, Chrome can be 0
                             var status = 200;
-                            if (ajaxRequest.readyState === 4) {
+                            if (ajaxRequest.readyState > 1) {
                                 status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
                             }
 
@@ -1607,11 +1588,6 @@ jQuery.atmosphere = function () {
                                 _clearState();
                                 reconnectF();
                                 return;
-                            }
-                            
-                            // Firefox incorrectly send statechange 0->2 when a reconnect attempt fails. The above checks ensure that onopen is not called for these
-                            if ((!rq.enableProtocol || !request.firstMessage) && ajaxRequest.readyState === 2) {
-                                _triggerOpen(rq);
                             }
                         } else if (ajaxRequest.readyState === 4) {
                             update = true;
@@ -1790,13 +1766,9 @@ jQuery.atmosphere = function () {
 
                     // Reconnect immedialtely
                     clearTimeout(request.id);
-                    if (request.reconnectId) {
-                        clearTimeout(request.reconnectId);
-                    }
-
                     if (reconnectInterval > 0) {
-                        setTimeout(function () {
-                            _request.reconnectId = _executeRequest(request);
+                        request.id = setTimeout(function () {
+                            _executeRequest(request);
                         }, reconnectInterval);
                     } else {
                         _executeRequest(request);
@@ -1861,7 +1833,7 @@ jQuery.atmosphere = function () {
                         _clearState();
                         if (_requestCount++ < rq.maxReconnectOnClose) {
                             if (rq.reconnectInterval > 0) {
-                                rq.reconnectId = setTimeout(function () {
+                                rq.id = setTimeout(function () {
                                     _open('re-connecting', request.transport, request);
                                     _ieXDR(rq);
                                 }, rq.reconnectInterval);
@@ -2058,7 +2030,7 @@ jQuery.atmosphere = function () {
                                         _invokeClose(true);
                                         _open('re-connecting', rq.transport, rq);
                                         if (rq.reconnectInterval > 0) {
-                                            rq.reconnectId = setTimeout(function () {
+                                            rq.id = setTimeout(function () {
                                                 _ieStreaming(rq);
                                             }, rq.reconnectInterval);
                                         } else {
@@ -2074,7 +2046,7 @@ jQuery.atmosphere = function () {
                                 _open('re-connecting', rq.transport, rq);
                                 if (_requestCount++ < rq.maxReconnectOnClose) {
                                     if (rq.reconnectInterval > 0) {
-                                        rq.reconnectId = setTimeout(function () {
+                                        rq.id = setTimeout(function () {
                                             _ieStreaming(rq);
                                         }, rq.reconnectInterval);
                                     } else {
@@ -2251,7 +2223,7 @@ jQuery.atmosphere = function () {
              *
              */
             function _pushWebSocket(message) {
-                var msg = jQuery.atmosphere.isBinary(message) ? message : _getStringMessage(message);
+                var msg = _getStringMessage(message);
                 var data;
                 try {
                     if (_request.dispatchUrl != null) {
@@ -2347,7 +2319,6 @@ jQuery.atmosphere = function () {
                             f.onError(response);
                         break;
                     case "opening":
-                        delete _request.closed;
                         if (typeof (f.onOpen) !== 'undefined')
                             f.onOpen(response);
                         break;
@@ -2364,7 +2335,6 @@ jQuery.atmosphere = function () {
                             f.onClientTimeout(_request);
                         break;
                     case "re-opening":
-                        delete _request.closed;
                         if (typeof (f.onReopen) !== 'undefined')
                             f.onReopen(_request, response);
                         break;
@@ -2489,20 +2459,16 @@ jQuery.atmosphere = function () {
                     var url = _request.url.replace(/([?&])_=[^&]*/, query);
                     url = url + (url === _request.url ? (/\?/.test(_request.url) ? "&" : "?") + query : "");
 
-                    var async = (jQuery.browser.msie) ? true: false;
-
                     if (_request.connectTimeout > 0) {
                         jQuery.ajax({
                             url: url,
-                            async: async,
-                            timeout: _request.connectTimeout,
-                            cache: false
+                            async: false,
+                            timeout: _request.connectTimeout
                         });
                     } else {
                         jQuery.ajax({
                             url: url,
-                            async: async,
-                            cache: false
+                            async: false
                         });
                     }
                 }
@@ -2514,9 +2480,6 @@ jQuery.atmosphere = function () {
              * @private
              */
             function _close() {
-                if (_request.reconnectId) {
-                    clearTimeout(_request.reconnectId);
-                }
                 _request.reconnect = false;
                 _abordingConnection = true;
                 _response.request = _request;
@@ -2566,7 +2529,7 @@ jQuery.atmosphere = function () {
                     // Clears trace timer
                     clearInterval(_traceTimer);
                     // Removes the trace
-                    document.cookie = _sharingKey + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+                    document.cookie = _sharingKey + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
                     // The heir is the parent unless unloading
                     _storageService.signal("close", {
                         reason: "",
@@ -2713,12 +2676,12 @@ jQuery.atmosphere = function () {
                 return true;
             }
 
-            // KreaTV 4.1 -> 4.4
+            // KreaTV 4.1 -> 4.6
             else if (jQuery.trim(navigator.userAgent).slice(0, 16) === "KreaTVWebKit/531") {
                 return true;
             }
             // KreaTV 3.8
-            else if (jQuery.trim(navigator.userAgent).slice(-7).toLowerCase() === "kreatel") {
+            else if (jQuery.trim(navigator.userAgent).slice(-7).toLowerCase() === "Kreatel") {
                 return true;
             }
 
@@ -2814,12 +2777,6 @@ jQuery.atmosphere = function () {
 
         error: function () {
             jQuery.atmosphere.log('error', arguments);
-        },
-
-        // TODO extract to utils or something
-        isBinary: function (data) {
-            // True if data is an instance of Blob, ArrayBuffer or ArrayBufferView 
-            return /^\[object\s(?:Blob|ArrayBuffer|.+Array)\]$/.test(Object.prototype.toString.call(data));
         }
     };
 }();
