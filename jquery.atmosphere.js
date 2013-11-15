@@ -1,5 +1,5 @@
 /**
- * Copyright 2013 Jeanfrancois Arcand
+ * Copyright 2012 Jeanfrancois Arcand
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,8 +54,7 @@ jQuery.atmosphere = function () {
     };
 
     return {
-        version: "2.0.5-jquery",
-        uuid : 0,
+        version: "2.0.2-jquery",
         requests: [],
         callbacks: [],
 
@@ -167,7 +166,7 @@ jQuery.atmosphere = function () {
                 request: null,
                 partialMessage: "",
                 errorHandled: false,
-                closedByClientTimeout: false
+                id: 0
             };
 
             /**
@@ -256,9 +255,6 @@ jQuery.atmosphere = function () {
 
             /** Trace time */
             var _traceTimer;
-
-            /** Key for connection sharing */
-            var _sharingKey;
 
             // Automatic call to subscribe
             _subscribe(options);
@@ -356,11 +352,9 @@ jQuery.atmosphere = function () {
                 }
 
                 // Protocol
-                _request.firstMessage = jQuery.atmosphere.uuid == 0 ? true : false;
+                _request.firstMessage = true;
                 _request.isOpen = false;
                 _request.ctime = jQuery.now();
-                _request.uuid = jQuery.atmosphere.uuid;
-                _request.closedByClientTimeout = false;
 
                 if (_request.transport !== 'websocket' && _request.transport !== 'sse') {
                     _executeRequest(_request);
@@ -685,13 +679,13 @@ jQuery.atmosphere = function () {
                 };
 
                 function leaveTrace() {
-                    document.cookie = _sharingKey + "=" +
+                    document.cookie = encodeURIComponent(name) + "=" +
                         // Opera's JSON implementation ignores a number whose a last digit of 0 strangely
                         // but has no problem with a number whose a last digit of 9 + 1
                         encodeURIComponent(jQuery.stringifyJSON({
                             ts: jQuery.now() + 1,
                             heir: (storageService.get("children") || [])[0]
-                        })) + "; path=/";
+                        }));
                 }
 
                 // Chooses a storageService
@@ -710,7 +704,6 @@ jQuery.atmosphere = function () {
                     storageService.set("opened", false);
                 }
                 // Leaves traces
-                _sharingKey = encodeURIComponent(name);
                 leaveTrace();
                 _traceTimer = setInterval(leaveTrace, 1000);
 
@@ -1032,7 +1025,7 @@ jQuery.atmosphere = function () {
                 _sse.onerror = function (message) {
                     clearTimeout(_request.id);
 
-                    if (_response.closedByClientTimeout) return;
+                    if (_response.state === 'closedByClient') return;
 
                     _invokeClose(sseOpened);
                     _clearState();
@@ -1207,7 +1200,7 @@ jQuery.atmosphere = function () {
                         jQuery.atmosphere.warn("Websocket closed, wasClean: " + message.wasClean);
                     }
 
-                    if (_response.closedByClientTimeout) {
+                    if (_response.state === 'closedByClient') {
                         return;
                     }
 
@@ -1267,11 +1260,6 @@ jQuery.atmosphere = function () {
                     if (request.transport !== 'long-polling') {
                         _triggerOpen(request);
                     }
-
-                    jQuery.atmosphere.uuid = request.uuid;
-                } else if (request.enableProtocol && request.firstMessage) {
-                    // In case we are getting some junk from IE
-                    b = false;
                 } else {
                     _triggerOpen(request);
                 }
@@ -1290,7 +1278,6 @@ jQuery.atmosphere = function () {
             }
 
             function _onClientTimeout(_request) {
-                _response.closedByClientTimeout = true;
                 _response.state = 'closedByClient';
                 _response.responseBody = "";
                 _response.status = 408;
@@ -1583,8 +1570,8 @@ jQuery.atmosphere = function () {
                                 _triggerOpen(rq);
                             }
                             // MSIE 9 and lower status can be higher than 1000, Chrome can be 0
-                            var status = 200;
-                            if (ajaxRequest.readyState > 1) {
+                            var status = 0;
+                            if (ajaxRequest.readyState !== 0) {
                                 status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
                             }
 
@@ -1595,8 +1582,6 @@ jQuery.atmosphere = function () {
                                 reconnectF();
                                 return;
                             }
-                        } else if (ajaxRequest.readyState === 4) {
-                            update = true;
                         }
 
                         if (update) {
@@ -1674,7 +1659,7 @@ jQuery.atmosphere = function () {
                                 _response.state = "messagePublished";
                             }
 
-                            var isAllowedToReconnect = request.transport !== 'streaming' && request.transport !== 'polling';;
+                            var isAllowedToReconnect = request.transport !== 'streaming';
                             if (isAllowedToReconnect && !rq.executeCallbackBeforeReconnect) {
                                 _reconnect(ajaxRequest, rq, 0);
                             }
@@ -2098,9 +2083,6 @@ jQuery.atmosphere = function () {
                     _pushJsonp(message);
                 } else if (_websocket != null) {
                     _pushWebSocket(message);
-                } else {
-                    _onError(0, "No suspended connection available");
-                    jQuery.atmosphere.error("No suspended connection available. Make sure atmosphere.subscribe has been called and request.onOpen invoked before invoking this method");
                 }
             }
 
@@ -2229,7 +2211,7 @@ jQuery.atmosphere = function () {
              *
              */
             function _pushWebSocket(message) {
-                var msg = jQuery.atmosphere.isBinary(message) ? message : _getStringMessage(message);
+                var msg = _getStringMessage(message);
                 var data;
                 try {
                     if (_request.dispatchUrl != null) {
@@ -2454,14 +2436,6 @@ jQuery.atmosphere = function () {
             function _disconnect() {
                 if (_request.enableProtocol && !_request.firstMessage) {
                     var query = "X-Atmosphere-Transport=close&X-Atmosphere-tracking-id=" + _request.uuid;
-
-                    jQuery.each(_request.headers, function (name, value) {
-                        var h = jQuery.isFunction(value) ? value.call(this, _request, _request, _response) : value;
-                        if (h != null) {
-                            query += "&" + encodeURIComponent(name) + "=" + encodeURIComponent(h);
-                        }
-                    });
-
                     var url = _request.url.replace(/([?&])_=[^&]*/, query);
                     url = url + (url === _request.url ? (/\?/.test(_request.url) ? "&" : "?") + query : "");
 
@@ -2535,7 +2509,7 @@ jQuery.atmosphere = function () {
                     // Clears trace timer
                     clearInterval(_traceTimer);
                     // Removes the trace
-                    document.cookie = _sharingKey + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+                    document.cookie = encodeURIComponent("atmosphere-" + _request.url) + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
                     // The heir is the parent unless unloading
                     _storageService.signal("close", {
                         reason: "",
@@ -2682,15 +2656,6 @@ jQuery.atmosphere = function () {
                 return true;
             }
 
-            // KreaTV 4.1 -> 4.4
-            else if (jQuery.trim(navigator.userAgent).slice(0, 16) === "KreaTVWebKit/531") {
-                return true;
-            }
-            // KreaTV 3.8
-            else if (jQuery.trim(navigator.userAgent).slice(-7).toLowerCase() === "kreatel") {
-                return true;
-            }
-
             // Force Android to use CORS as some version like 2.2.3 fail otherwise
             var ua = navigator.userAgent.toLowerCase();
             var isAndroid = ua.indexOf("android") > -1;
@@ -2783,12 +2748,6 @@ jQuery.atmosphere = function () {
 
         error: function () {
             jQuery.atmosphere.log('error', arguments);
-        },
-        
-        // TODO extract to utils or something
-        isBinary: function (data) {
-            var string = Object.prototype.toString.call(data);
-            return string === "[object Blob]" || string === "[object ArrayBuffer]";
         }
     };
 }();
