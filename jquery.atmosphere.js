@@ -54,7 +54,7 @@ jQuery.atmosphere = function () {
     };
 
     return {
-        version: "2.1.2-jquery",
+        version: "2.0.9-jquery",
         uuid : 0,
         requests: [],
         callbacks: [],
@@ -120,7 +120,7 @@ jQuery.atmosphere = function () {
                 messageDelimiter: '|',
                 connectTimeout: -1,
                 reconnectInterval: 0,
-                dropHeaders: true,
+                dropAtmosphereHeaders: true,
                 uuid: 0,
                 shared: false,
                 readResponsesHeaders: false,
@@ -359,11 +359,7 @@ jQuery.atmosphere = function () {
                 _request.firstMessage = jQuery.atmosphere.uuid == 0 ? true : false;
                 _request.isOpen = false;
                 _request.ctime = jQuery.now();
-
-                // We carry any UUID set by the user or from a previous connection.
-                if (_request.uuid === 0) {
-                    _request.uuid = jQuery.atmosphere.uuid;
-                }
+                _request.uuid = jQuery.atmosphere.uuid;
                 _request.closedByClientTimeout = false;
 
                 if (_request.transport !== 'websocket' && _request.transport !== 'sse') {
@@ -1463,7 +1459,7 @@ jQuery.atmosphere = function () {
                 }
 
                 if (rq.contentType !== '') {
-                    url += "&Content-Type=" + encodeURIComponent(rq.contentType);
+                    url += "&Content-Type=" + rq.contentType;
                 }
 
                 if (rq.enableProtocol) {
@@ -1516,7 +1512,7 @@ jQuery.atmosphere = function () {
                     return;
                 }
 
-                if (jQuery.browser.msie && +jQuery.browser.version.split(".")[0] < 10) {
+                if (jQuery.browser.msie && jQuery.browser.version < 10) {
                     if ((rq.transport === 'streaming')) {
                         if (rq.enableXDR && window.XDomainRequest) {
                             _ieXDR(rq);
@@ -1627,10 +1623,10 @@ jQuery.atmosphere = function () {
                         if (update) {
                             var responseText = ajaxRequest.responseText;
 
-                            if (jQuery.trim(responseText).length === 0 && rq.transport === 'long-polling') {
+                            if (jQuery.trim(responseText.length).length === 0 && rq.transport === 'long-polling') {
                                 // For browser that aren't support onabort
                                 if (!ajaxRequest.hasData) {
-                                    _reconnect(ajaxRequest, rq, 0);
+                                    reconnectF();
                                 } else {
                                     ajaxRequest.hasData = false;
                                 }
@@ -1759,7 +1755,7 @@ jQuery.atmosphere = function () {
                     }
                 }
 
-                if (!_request.dropHeaders) {
+                if (!_request.dropAtmosphereHeaders) {
                     ajaxRequest.setRequestHeader("X-Atmosphere-Framework", jQuery.atmosphere.version);
                     ajaxRequest.setRequestHeader("X-Atmosphere-Transport", request.transport);
                     if (request.lastTimestamp != null) {
@@ -1772,18 +1768,18 @@ jQuery.atmosphere = function () {
                         ajaxRequest.setRequestHeader("X-Atmosphere-TrackMessageSize", "true");
                     }
                     ajaxRequest.setRequestHeader("X-Atmosphere-tracking-id", request.uuid);
-
-                    jQuery.each(request.headers, function (name, value) {
-                        var h = jQuery.isFunction(value) ? value.call(this, ajaxRequest, request, create, _response) : value;
-                        if (h != null) {
-                            ajaxRequest.setRequestHeader(name, h);
-                        }
-                    });
                 }
 
                 if (request.contentType !== '') {
                     ajaxRequest.setRequestHeader("Content-Type", request.contentType);
                 }
+
+                jQuery.each(request.headers, function (name, value) {
+                    var h = jQuery.isFunction(value) ? value.call(this, ajaxRequest, request, create, _response) : value;
+                    if (h != null) {
+                        ajaxRequest.setRequestHeader(name, h);
+                    }
+                });
             }
 
             function _reconnect(ajaxRequest, request, reconnectInterval) {
@@ -2324,6 +2320,16 @@ jQuery.atmosphere = function () {
                         if (tempUUID && tempUUID != null) {
                             request.uuid = tempUUID.split(" ").pop();
                         }
+
+                        // HOTFIX for firefox bug: https://bugzilla.mozilla.org/show_bug.cgi?id=608735
+                        if (request.headers) {
+                            jQuery.each(_request.headers, function (name) {
+                                var v = xdr.getResponseHeader(name);
+                                if (v) {
+                                    _response.headers[name] = v;
+                                }
+                            });
+                        }
                     } catch (e) {
                     }
                 }
@@ -2635,9 +2641,6 @@ jQuery.atmosphere = function () {
                 jQuery.atmosphere.addCallback(callback);
             }
 
-            // https://github.com/Atmosphere/atmosphere-javascript/issues/58
-            jQuery.atmosphere.uuid = 0;
-
             if (typeof (url) !== "string") {
                 request = url;
             } else {
@@ -2711,7 +2714,7 @@ jQuery.atmosphere = function () {
         checkCORSSupport: function () {
             if (jQuery.browser.msie && !window.XDomainRequest) {
                 return true;
-            } else if (jQuery.browser.opera && +jQuery.browser.version.split(".")[0] < 12.0) {
+            } else if (jQuery.browser.opera && jQuery.browser.version < 12.0) {
                 return true;
             }
 
@@ -2838,13 +2841,8 @@ jQuery.atmosphere = function () {
     jQuery.uaMatch = function (ua) {
         ua = ua.toLowerCase();
 
-        var match = /(chrome)[ \/]([\w.]+)/.exec(ua) || 
-                /(webkit)[ \/]([\w.]+)/.exec(ua) || 
-                /(opera)(?:.*version|)[ \/]([\w.]+)/.exec(ua) || 
-                /(msie) ([\w.]+)/.exec(ua) || 
-                /(trident)(?:.*? rv:([\w.]+)|)/.exec(ua) ||
-                ua.indexOf("compatible") < 0 && /(mozilla)(?:.*? rv:([\w.]+)|)/.exec(ua) || 
-                [];
+        var match = /(chrome)[ \/]([\w.]+)/.exec(ua) || /(webkit)[ \/]([\w.]+)/.exec(ua) || /(opera)(?:.*version|)[ \/]([\w.]+)/.exec(ua)
+            || /(msie) ([\w.]+)/.exec(ua) || ua.indexOf("compatible") < 0 && /(mozilla)(?:.*? rv:([\w.]+)|)/.exec(ua) || [];
 
         return {
             browser: match[1] || "",
@@ -2865,12 +2863,6 @@ jQuery.atmosphere = function () {
         browser.webkit = true;
     } else if (browser.webkit) {
         browser.safari = true;
-    }
-    
-    // Trident is the layout engine of the Internet Explorer
-    // IE 11 has no "MSIE: 11.0" token
-    if (browser.trident) {
-    	browser.msie = true;
     }
 
     jQuery.browser = browser;
