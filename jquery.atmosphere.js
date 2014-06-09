@@ -60,7 +60,7 @@
     };
 
     jQuery.atmosphere = {
-        version: "2.1.5-jquery",
+        version: "2.1.6-jquery",
         uuid : 0,
         requests: [],
         callbacks: [],
@@ -1305,7 +1305,7 @@
                     }
 
                     jQuery.atmosphere.uuid = request.uuid;
-                } else if (request.enableProtocol && request.firstMessage) {
+                } else if (request.enableProtocol && request.firstMessage && jQuery.browser.msie && +jQuery.browser.version.split(".")[0] < 10) {
                     // In case we are getting some junk from IE
                     b = false;
                 } else {
@@ -2653,14 +2653,14 @@
                 jQuery.atmosphere.addCallback(callback);
             }
 
-            // https://github.com/Atmosphere/atmosphere-javascript/issues/58
-            jQuery.atmosphere.uuid = 0;
-
             if (typeof (url) !== "string") {
                 request = url;
             } else {
                 request.url = url;
             }
+
+            // https://github.com/Atmosphere/atmosphere-javascript/issues/58
+            jQuery.atmosphere.uuid = ((typeof (request) !== 'undefined') && typeof (request.uuid) !== 'undefined') ? request.uuid : 0;
 
             var rq = new jQuery.atmosphere.AtmosphereRequest(request);
             rq.execute();
