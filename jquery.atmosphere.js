@@ -60,7 +60,7 @@
     };
 
     jQuery.atmosphere = {
-        version: "2.1.3-jquery",
+        version: "2.1.4-jquery",
         uuid : 0,
         requests: [],
         callbacks: [],
@@ -1593,6 +1593,9 @@
                         var update = false;
 
                         if (rq.transport === 'streaming' && rq.readyState > 2 && ajaxRequest.readyState === 4) {
+                            if (rq.reconnectingOnLength) {
+                                return;
+                            }
                             _clearState();
                             reconnectF();
                             return;
@@ -1795,7 +1798,7 @@
             function _reconnect(ajaxRequest, request, reconnectInterval) {
                 if (request.reconnect || (request.suspend && _subscribed)) {
                     var status = 0;
-                    if (ajaxRequest.readyState !== 0) {
+                    if (ajaxRequest.readyState > 1) {
                         status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
                     }
                     _response.status = status === 0 ? 204 : status;
@@ -2469,6 +2472,7 @@
                 // Wait to be sure we have the full message before closing.
                 if (_response.partialMessage === "" && (rq.transport === 'streaming') && (ajaxRequest.responseText.length > rq.maxStreamingLength)) {
                     _response.messages = [];
+                    rq.reconnectingOnLength = true;
                     _invokeClose(true);
                     _disconnect();
                     _clearState();
@@ -2498,14 +2502,14 @@
                     if (_request.connectTimeout > 0) {
                         jQuery.ajax({
                             url: url,
-                            async: true,
+                            async: false,
                             timeout: _request.connectTimeout,
                             cache: false
                         });
                     } else {
                         jQuery.ajax({
                             url: url,
-                            async: true,
+                            async: false,
                             cache: false
                         });
                     }
