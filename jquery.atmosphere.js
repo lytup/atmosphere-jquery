@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Jeanfrancois Arcand
+ * Copyright 2013 Jeanfrancois Arcand
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,7 +60,7 @@
     };
 
     jQuery.atmosphere = {
-        version: "2.2.0-jquery",
+        version: "2.1.3-jquery",
         uuid : 0,
         requests: [],
         callbacks: [],
@@ -84,49 +84,6 @@
         onClientTimeout: function(request){
         },
         onFailureToReconnect: function (request, response) {
-        },
-
-        /**
-         * Creates an object based on an atmosphere subscription that exposes functions defined by the Websocket interface.
-         *
-         * @class WebsocketApiAdapter
-         * @param {Object} request the request object to build the underlying subscription
-         * @constructor
-         */
-        WebsocketApiAdapter: function (request) {
-            var _socket, _adapter;
-
-            /**
-             * Overrides the onMessage callback in given request.
-             *
-             * @method onMessage
-             * @param {Object} e the event object
-             */
-            request.onMessage = function (e) {
-                _adapter.onmessage({data: e.responseBody});
-            };
-
-            _adapter = {
-                send: function (data) {
-                    _socket.push(data);
-                },
-
-                onmessage: function(e) {
-                },
-
-                onopen: function(e) {
-                },
-
-                onclose: function (e) {
-                },
-
-                onerror: function (e) {
-
-                }
-            };
-            _socket = new $.atmosphere.subscribe(request);
-
-            return _adapter;
         },
 
         AtmosphereRequest: function (options) {
@@ -175,7 +132,6 @@
                 readResponsesHeaders: false,
                 maxReconnectOnClose: 5,
                 enableProtocol: true,
-                pollingInterval : 0,
                 onError: function (response) {
                 },
                 onClose: function (response) {
@@ -217,8 +173,7 @@
                 request: null,
                 partialMessage: "",
                 errorHandled: false,
-                closedByClientTimeout: false,
-                ffTryingReconnect : false
+                closedByClientTimeout: false
             };
 
             /**
@@ -864,7 +819,7 @@
                                 _readHeaders(_jqxhr, rq);
 
                                 if (!rq.executeCallbackBeforeReconnect) {
-                                    _reconnect(_jqxhr, rq, rq.pollingInterval);
+                                    _reconnect(_jqxhr, rq, 0);
                                 }
 
                                 var msg = json.message;
@@ -882,7 +837,7 @@
                                 }
 
                                 if (rq.executeCallbackBeforeReconnect) {
-                                    _reconnect(_jqxhr, rq, rq.pollingInterval);
+                                    _reconnect(_jqxhr, rq, 0);
                                 }
                             } else {
                                 jQuery.atmosphere.log(_request.logLevel, ["JSONP reconnect maximum try reached " + _request.requestCount]);
@@ -940,7 +895,7 @@
                         if (rq.reconnect) {
                             if (rq.maxRequest === -1 || rq.requestCount++ < rq.maxRequest) {
                                 if (!rq.executeCallbackBeforeReconnect) {
-                                    _reconnect(_jqxhr, rq, rq.pollingInterval);
+                                    _reconnect(_jqxhr, rq, 0);
                                 }
                                 var skipCallbackInvocation = _trackMessageSize(data, rq, _response);
                                 if (!skipCallbackInvocation) {
@@ -948,7 +903,7 @@
                                 }
 
                                 if (rq.executeCallbackBeforeReconnect) {
-                                    _reconnect(_jqxhr, rq, rq.pollingInterval);
+                                    _reconnect(_jqxhr, rq, 0);
                                 }
                             } else {
                                 jQuery.atmosphere.log(_request.logLevel, ["AJAX reconnect maximum try reached " + _request.requestCount]);
@@ -1189,12 +1144,12 @@
 
                     var reopening = webSocketOpened;
 
+                    webSocketOpened = true;
                     if(_websocket != null) {
-                        _websocket.canSendMessage = true;
+                        _websocket.webSocketOpened = webSocketOpened;
                     }
 
                     if (!_request.enableProtocol) {
-                        webSocketOpened = true;
                         if (reopening) {
                             _open('re-opening', "websocket", _request);
                         } else {
@@ -1213,12 +1168,6 @@
                 _websocket.onmessage = function (message) {
                     _timeout(_request);
 
-                    // We only consider it opened if we get the handshake data
-                    // https://github.com/Atmosphere/atmosphere-javascript/issues/74
-                    if (_request.enableProtocol) {
-                        webSocketOpened = true;
-                    }
-
                     _response.state = 'messageReceived';
                     _response.status = 200;
 
@@ -1232,8 +1181,7 @@
                             _response.messages = [];
                         }
                     } else {
-                        message = _handleProtocol(_request, message);
-                        if (message === "")
+                        if (!_handleProtocol(_request, message))
                             return;
 
                         _response.responseBody = message;
@@ -1298,7 +1246,7 @@
                     } else if (!webSocketOpened) {
                         _reconnectWithFallbackTransport("Websocket failed. Downgrading to Comet and resending");
 
-                    } else if (_request.reconnect && _response.transport === 'websocket' && message.code !== 1001) {
+                    } else if (_request.reconnect && _response.transport === 'websocket') {
                         _clearState();
                         if (_requestCount++ < _request.maxReconnectOnClose) {
                             _open('re-connecting', _request.transport, _request);
@@ -1323,9 +1271,7 @@
                     }
                 };
 
-                var ua = navigator.userAgent.toLowerCase();
-                var isAndroid = ua.indexOf("android") > -1;
-                if (isAndroid && _websocket.url === undefined) {
+                if (_websocket.url === undefined) {
                     // Android 4.1 does not really support websockets and fails silently
                     _websocket.onclose({
                         reason: "Android 4.1 does not support websockets.",
@@ -1335,45 +1281,30 @@
             }
 
             function _handleProtocol(request, message) {
-                var nMessage = message;
-                if (request.transport === 'polling') return nMessage;
+                // The first messages is always the uuid.
+                var b = true;
+
+                if (request.transport === 'polling') return b;
 
                 if (jQuery.trim(message).length !== 0 && request.enableProtocol && request.firstMessage) {
-                    var pos = request.trackMessageLength ? 1 : 0;
-                    var messages = message.split(request.messageDelimiter);
-
-                    if (messages.length <= pos + 1) {
-                        // Something went wrong, normally with IE or when a message is written before the
-                        // handshake has been received.
-                        return nMessage;
-                    }
-
                     request.firstMessage = false;
+                    var messages = message.split(request.messageDelimiter);
+                    var pos = messages.length === 2 ? 0 : 1;
                     request.uuid = jQuery.trim(messages[pos]);
                     request.stime = jQuery.trim(messages[pos + 1]);
                     b = false;
                     if (request.transport !== 'long-polling') {
                         _triggerOpen(request);
                     }
-                    jQuery.atmosphere.uuid = request.uuid;
-                    nMessage = "";
 
-                    // We have trailing messages
-                    pos = request.trackMessageLength ? 3 : 2;
-                    if (messages.length > pos + 1) {
-                        for (var i = pos; i < messages.length; i++) {
-                            nMessage += messages[i];
-                            if (i + 1 !== messages.length) {
-                                nMessage += request.messageDelimiter;
-                            }
-                        }
-                    }
+                    jQuery.atmosphere.uuid = request.uuid;
                 } else if (request.enableProtocol && request.firstMessage) {
                     // In case we are getting some junk from IE
+                    b = false;
                 } else {
                     _triggerOpen(request);
                 }
-                return nMessage;
+                return b;
             }
 
             function _timeout(_request) {
@@ -1415,11 +1346,10 @@
              * @param response
              */
             function _trackMessageSize(message, request, response) {
-                message = _handleProtocol(request, message);
+                if (!_handleProtocol(request, message))
+                    return true;
                 if (message.length === 0)
                     return true;
-
-                response.responseBody = message;
 
                 if (request.trackMessageLength) {
                     // prepend partialMessage if any
@@ -1428,7 +1358,7 @@
                     var messages = [];
                     var messageStart = message.indexOf(request.messageDelimiter);
                     while (messageStart !== -1) {
-                        var str = message.substring(0, messageStart);
+                        var str = jQuery.trim(message.substring(0, messageStart));
                         var messageLength = parseInt(str, 10);
                         if (isNaN(messageLength))
                             throw 'message length "' + str + '" is not a number';
@@ -1618,13 +1548,6 @@
                     }
                 };
 
-                var disconnected = function () {
-                    // Prevent onerror callback to be called
-                    _response.errorHandled = true;
-                    _clearState();
-                    reconnectF();
-                };
-
                 if (rq.reconnect && (rq.maxRequest === -1 || rq.requestCount++ < rq.maxRequest)) {
                     var ajaxRequest = jQuery.ajaxSettings.xhr();
                     ajaxRequest.hasData = false;
@@ -1644,7 +1567,6 @@
 
                         ajaxRequest.onerror = function () {
                             _response.error = true;
-                            _response.ffTryingReconnect = true;
                             try {
                                 _response.status = XMLHttpRequest.status;
                             } catch (e) {
@@ -1693,25 +1615,17 @@
                             }
 
                             if (status >= 300 || status === 0) {
-                                disconnected();
+                                // Prevent onerror callback to be called
+                                _response.errorHandled = true;
+                                _clearState();
+                                reconnectF();
                                 return;
                             }
                             
                             // Firefox incorrectly send statechange 0->2 when a reconnect attempt fails. The above checks ensure that onopen is not called for these
                             if ((!rq.enableProtocol || !request.firstMessage) && ajaxRequest.readyState === 2) {
-                                // Firefox incorrectly send statechange 0->2 when a reconnect attempt fails. The above checks ensure that onopen is not called for these
-                                // In that case, ajaxRequest.onerror will be called just after onreadystatechange is called, so we delay the trigger untill we are
-                                // garantee the connection is well established.
-                                if (jQuery.browser.mozilla && _response.ffTryingReconnect) {
-                                    _response.ffTryingReconnect = false;
-                                    setTimeout(function(){
-                                       if (!_response.ffTryingReconnect) {
-                                           _triggerOpen(rq);
-                                       }
-                                    }, 500);
-                                } else {
-                                    _triggerOpen(rq);
-                                }                            }
+                                _triggerOpen(rq);
+                            }
                         } else if (ajaxRequest.readyState === 4) {
                             update = true;
                         }
@@ -1722,7 +1636,7 @@
                             if (jQuery.trim(responseText).length === 0 && rq.transport === 'long-polling') {
                                 // For browser that aren't support onabort
                                 if (!ajaxRequest.hasData) {
-                                    disconnected();
+                                    _reconnect(ajaxRequest, rq, 0);
                                 } else {
                                     ajaxRequest.hasData = false;
                                 }
@@ -1764,10 +1678,7 @@
                                                 _invokeCallback();
                                             }
 
-                                            if (_verifyStreamingLength(ajaxRequest, rq)){
-                                                _reconnectOnMaxStreamingLength(ajaxRequest, rq);
-                                                return;
-                                            }
+                                            _verifyStreamingLength(ajaxRequest, rq);
                                         } else if (_response.status > 400) {
                                             // Prevent replaying the last message.
                                             rq.lastIndex = ajaxRequest.responseText.length;
@@ -1778,7 +1689,6 @@
                             } else {
                                 skipCallbackInvocation = _trackMessageSize(responseText, rq, _response);
                             }
-                            var closeStream = _verifyStreamingLength(ajaxRequest, rq);
 
                             try {
                                 _response.status = ajaxRequest.status;
@@ -1795,21 +1705,19 @@
                                 _response.state = "messagePublished";
                             }
 
-                            var isAllowedToReconnect = !closeStream && request.transport !== 'streaming' && request.transport !== 'polling';;
+                            var isAllowedToReconnect = request.transport !== 'streaming' && request.transport !== 'polling';;
                             if (isAllowedToReconnect && !rq.executeCallbackBeforeReconnect) {
-                                _reconnect(ajaxRequest, rq, rq.pollingInterval);
+                                _reconnect(ajaxRequest, rq, 0);
                             }
 
                             if (_response.responseBody.length !== 0 && !skipCallbackInvocation)
                                 _invokeCallback();
 
                             if (isAllowedToReconnect && rq.executeCallbackBeforeReconnect) {
-                                _reconnect(ajaxRequest, rq, rq.pollingInterval);
+                                _reconnect(ajaxRequest, rq, 0);
                             }
 
-                            if (closeStream) {
-                                _reconnectOnMaxStreamingLength(ajaxRequest, rq);
-                            }
+                            _verifyStreamingLength(ajaxRequest, rq);
                         }
                     };
 
@@ -1821,12 +1729,6 @@
                     }
                     _onError(0, "maxRequest reached");
                 }
-            }
-
-            function _reconnectOnMaxStreamingLength(ajaxRequest, rq) {
-                _close();
-                _abordingConnection = false;
-                _reconnect(ajaxRequest, rq, 500);
             }
 
             /**
@@ -1857,7 +1759,7 @@
                     }
                 }
 
-                if (_request.withCredentials && _request.transport !== 'websocket') {
+                if (_request.withCredentials) {
                     if ("withCredentials" in ajaxRequest) {
                         ajaxRequest.withCredentials = true;
                     }
@@ -1893,7 +1795,7 @@
             function _reconnect(ajaxRequest, request, reconnectInterval) {
                 if (request.reconnect || (request.suspend && _subscribed)) {
                     var status = 0;
-                    if (ajaxRequest.readyState > 1) {
+                    if (ajaxRequest.readyState !== 0) {
                         status = ajaxRequest.status > 1000 ? 0 : ajaxRequest.status;
                     }
                     _response.status = status === 0 ? 204 : status;
@@ -2348,7 +2250,6 @@
                     dispatchUrl: _request.dispatchUrl,
                     enableProtocol: false,
                     messageDelimiter: '|',
-                    trackMessageLength: _request.trackMessageLength,
                     maxReconnectOnClose: _request.maxReconnectOnClose
                 };
 
@@ -2373,7 +2274,7 @@
                         data = msg;
                     }
 
-                    if (!_websocket.canSendMessage) {
+                    if (!_websocket.webSocketOpened) {
                         jQuery.atmosphere.error("WebSocket not connected.");
                         return;
                     }
@@ -2385,7 +2286,7 @@
                     };
                     _clearState();
 
-                    _reconnectWithFallbackTransport("Websocket failed. Downgrading to Comet and resending " + message);
+                    _reconnectWithFallbackTransport("Websocket failed. Downgrading to Comet and resending " + data);
                     _pushAjaxMessage(message);
                 }
             }
@@ -2480,12 +2381,8 @@
                     case "unsubscribe":
                     case "closed":
                         var closed = typeof (_request.closed) !== 'undefined' ? _request.closed : false;
-                        if (!closed) {
-                            if (typeof (f.onClose) !== 'undefined') {
-                                f.onClose(response);
-                            }
-                        }
-
+                        if (typeof (f.onClose) !== 'undefined' && !closed)
+                            f.onClose(response);
                         _request.closed = true;
                         break;
                 }
@@ -2571,9 +2468,12 @@
             function _verifyStreamingLength(ajaxRequest, rq) {
                 // Wait to be sure we have the full message before closing.
                 if (_response.partialMessage === "" && (rq.transport === 'streaming') && (ajaxRequest.responseText.length > rq.maxStreamingLength)) {
-                    return true;
+                    _response.messages = [];
+                    _invokeClose(true);
+                    _disconnect();
+                    _clearState();
+                    _reconnect(ajaxRequest, rq, 0);
                 }
-                return false;
             }
 
             /**
@@ -2598,14 +2498,14 @@
                     if (_request.connectTimeout > 0) {
                         jQuery.ajax({
                             url: url,
-                            async: false,
+                            async: true,
                             timeout: _request.connectTimeout,
                             cache: false
                         });
                     } else {
                         jQuery.ajax({
                             url: url,
-                            async: false,
+                            async: true,
                             cache: false
                         });
                     }
@@ -2630,11 +2530,11 @@
                 _response.status = 408;
                 _invokeCallback();
                 _disconnect();
+
                 _clearState();
             }
 
             function _clearState() {
-                _response.partialMessage = "";
                 if (_request.id) {
                     clearTimeout(_request.id);
                 }
@@ -2652,7 +2552,7 @@
                     _activeRequest = null;
                 }
                 if (_websocket != null) {
-                    if (_websocket.canSendMessage) {
+                    if (_websocket.webSocketOpened) {
                         _websocket.close();
                     }
                     _websocket = null;
@@ -2815,7 +2715,7 @@
         },
 
         checkCORSSupport: function () {
-            if (jQuery.browser.msie && !window.XDomainRequest && +jQuery.browser.version.split(".")[0] < 11) {
+            if (jQuery.browser.msie && !window.XDomainRequest) {
                 return true;
             } else if (jQuery.browser.opera && +jQuery.browser.version.split(".")[0] < 12.0) {
                 return true;
